@@ -1,4 +1,4 @@
-# 🧺 Clothesline (Tendedero)
+# 🧺 Clothesline
 
 <p align="center">
   <strong>Screenshots, hung out to dry.</strong><br>
@@ -18,7 +18,7 @@
   <img src="assets/preview.png" alt="Clothesline Expanded Preview" width="760">
 </p>
 
-Inspired by Alejandro Buján's native macOS app [Tendedero](https://github.com/alejandrobujan/tendedero), **Clothesline** brings the exact same physical, tactile delight to Linux (GNOME, KDE, Wayland, X11) and Windows. 
+Inspired by Alejandro Buján's native macOS app [Tendedero](https://github.com/alejandrobujan/tendedero), **Clothesline** brings the same physical, tactile delight to Linux (GNOME, KDE, Wayland, X11) and Windows. 
 
 Whenever you capture a screenshot, it automatically hangs from a braided clothesline at the top of your display with a wooden clothespin. Out of sight, but right within reach when you need it.
 
@@ -169,4 +169,4 @@ python3 clothesline.py --pinned
 
 This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for details.
 
-*Original design concept by [Alejandro Buján](https://github.com/alejandrobujan/tendedero).*
+*Original design concept: [Tendedero](https://github.com/alejandrobujan/tendedero) by Alejandro Buján (macOS). Clothesline is an independent project and is not affiliated with or endorsed by Tendedero or its author.*

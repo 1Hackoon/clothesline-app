@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Screenshot Clothesline (Tendedero)
+"""Screenshot Clothesline
 
 Screenshots hung out to dry:
 - True 100% per-pixel RGBA transparency on Wayland & X11 (NO black box / void!).
