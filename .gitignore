@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.env
+*.png
+!assets/*.png
+.vscode/
+.idea/
+*.deb
+build_deb/
+

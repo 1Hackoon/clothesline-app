@@ -137,6 +137,107 @@ class Shot:
 # GTK3 + Cairo Engine (True Per-Pixel RGBA Transparency on Linux)
 # ==============================================================================
 if HAS_GTK:
+    class QuickLookWindow(Gtk.Window):
+        """Full-size screenshot preview window (Quick Look)."""
+
+        def __init__(self, shot, on_edit=None):
+            super().__init__(type=Gtk.WindowType.TOPLEVEL)
+            self.shot = shot
+            self.on_edit = on_edit
+
+            title = os.path.basename(shot.path) if shot.path else 'Screenshot Preview'
+            self.set_title(title)
+            self.set_position(Gtk.WindowPosition.CENTER)
+            self.set_keep_above(True)
+
+            # Dark theme background
+            self.override_background_color(Gtk.StateFlags.NORMAL, Gdk.RGBA(0.08, 0.10, 0.14, 1.0))
+
+            header = Gtk.HeaderBar(show_close_button=True)
+            header.set_title(title)
+            header.set_subtitle(f'{shot.resolution} • {relative_time_str(shot.mtime)}')
+            self.set_titlebar(header)
+
+            btn_edit = Gtk.Button(label='✏️ Edit')
+            btn_edit.set_tooltip_text('Open in Markup & Crop editor (e)')
+            btn_edit.connect('clicked', self.on_click_edit)
+            header.pack_start(btn_edit)
+
+            btn_copy = Gtk.Button(label='📋 Copy')
+            btn_copy.set_tooltip_text('Copy image to clipboard (c)')
+            btn_copy.connect('clicked', self.on_click_copy)
+            header.pack_start(btn_copy)
+
+            if shot.path and os.path.exists(shot.path):
+                btn_folder = Gtk.Button(label='📂 Folder')
+                btn_folder.set_tooltip_text('Reveal in file manager')
+                btn_folder.connect('clicked', lambda w: reveal_in_folder(shot.path))
+                header.pack_start(btn_folder)
+
+            img = shot.full()
+            if img:
+                screen = self.get_screen()
+                max_w = int(screen.get_width() * 0.86)
+                max_h = int(screen.get_height() * 0.80)
+                iw, ih = img.size
+                scale = min(1.0, max_w / max(1, iw), max_h / max(1, ih))
+                tw, th = max(10, int(iw * scale)), max(10, int(ih * scale))
+                resized = img.resize((tw, th), Image.Resampling.LANCZOS) if scale < 1.0 else img
+
+                raw = resized.convert('RGBA').tobytes()
+                pb = GdkPixbuf.Pixbuf.new_from_data(
+                    raw, GdkPixbuf.Colorspace.RGB, True, 8, tw, th, tw * 4
+                )
+                gtk_image = Gtk.Image.new_from_pixbuf(pb)
+
+                event_box = Gtk.EventBox()
+                event_box.add(gtk_image)
+                event_box.connect('button-press-event', lambda w, e: self.destroy())
+
+                box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+                box.set_margin_start(10)
+                box.set_margin_end(10)
+                box.set_margin_top(10)
+                box.set_margin_bottom(10)
+                box.pack_start(event_box, True, True, 0)
+                self.add(box)
+
+            self.connect('key-press-event', self.on_key)
+            self.show_all()
+
+        def on_key(self, widget, event):
+            if event.keyval in (Gdk.KEY_Escape, Gdk.KEY_space, Gdk.KEY_q):
+                self.destroy()
+                return True
+            elif event.keyval in (Gdk.KEY_e, Gdk.KEY_E):
+                self.on_click_edit(None)
+                return True
+            elif event.keyval in (Gdk.KEY_c, Gdk.KEY_C):
+                self.on_click_copy(None)
+                return True
+            return False
+
+        def on_click_edit(self, widget):
+            self.destroy()
+            if self.on_edit:
+                self.on_edit(self.shot)
+
+        def on_click_copy(self, widget):
+            img = self.shot.full()
+            if img:
+                copy_image_to_clipboard(img)
+                try:
+                    clip = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+                    full_rgba = img.convert('RGBA')
+                    fw, fh = full_rgba.size
+                    full_pb = GdkPixbuf.Pixbuf.new_from_data(
+                        full_rgba.tobytes(), GdkPixbuf.Colorspace.RGB, True, 8, fw, fh, fw * 4
+                    )
+                    clip.set_image(full_pb)
+                    clip.store()
+                except Exception:
+                    pass
+
     class ClotheslineGtkApp:
         """Clothesline desktop interface using GTK3 and Cairo with 100% RGBA transparency."""
 
@@ -482,6 +583,7 @@ if HAS_GTK:
                 cx = start_x + i * (CARD_W + CARD_GAP)
                 cy = cord_y + 12 - card_offset_y
                 is_hovered = (self.hover_shot_idx == idx)
+                is_pin_hov = (self.hover_action == f'unpin_{idx}')
 
                 cr.save()
                 mid_cx = cx + CARD_W / 2.0
@@ -501,7 +603,7 @@ if HAS_GTK:
 
                 if is_hovered:
                     cr.set_source_rgba(0.38, 0.65, 0.98, 1.0)
-                    cr.set_line_width(2.0)
+                    cr.set_line_width(1.8)
                 else:
                     cr.set_source_rgba(0.24, 0.31, 0.42, 0.9)
                     cr.set_line_width(1.0)
@@ -509,7 +611,7 @@ if HAS_GTK:
 
                 # Thumbnail slot
                 slot_w = CARD_W - 12
-                slot_h = 82
+                slot_h = 80
                 slot_x = cx + 6
                 slot_y = cy + 6
 
@@ -526,70 +628,55 @@ if HAS_GTK:
                     Gdk.cairo_set_source_pixbuf(cr, shot.pixbuf, tx, ty)
                     cr.paint()
 
-                # Info row (Time & Resolution)
+                # Bottom info row:
+                # Left: Time
                 layout = PangoCairo.create_layout(cr)
                 desc = Pango.FontDescription('Sans 8')
                 layout.set_font_description(desc)
-
                 time_str = relative_time_str(shot.mtime)
                 layout.set_text(time_str, -1)
                 cr.set_source_rgba(0.65, 0.72, 0.82, 1.0)
                 cr.move_to(cx + 8, cy + 98)
                 PangoCairo.show_layout(cr, layout)
 
-                layout.set_text(shot.resolution, -1)
-                cr.set_source_rgba(0.45, 0.52, 0.62, 1.0)
-                ink, logical = layout.get_pixel_extents()
-                cr.move_to(cx + CARD_W - 8 - logical.width, cy + 98)
+                # Right: Action Buttons (🔍 View and ✏️ Edit)
+                by_btn = cy + 92
+
+                # 1. 🔍 View Button
+                bx_view = cx + CARD_W - 56
+                hov_view = (self.hover_action == f'view_{idx}')
+                cr.set_source_rgba(0.20, 0.28, 0.40, 0.95 if hov_view else 0.8)
+                self.rounded_rect(cr, bx_view, by_btn, 24, 22, 5)
+                cr.fill_preserve()
+                cr.set_source_rgba(0.38, 0.65, 0.98 if hov_view else 0.45, 0.9 if hov_view else 0.6)
+                cr.set_line_width(1.0)
+                cr.stroke()
+
+                layout.set_text('🔍', -1)
+                desc_icon = Pango.FontDescription('Sans 9')
+                layout.set_font_description(desc_icon)
+                cr.set_source_rgba(1.0, 1.0, 1.0, 1.0)
+                cr.move_to(bx_view + 4, by_btn + 3)
                 PangoCairo.show_layout(cr, layout)
 
-                # Action buttons on hover
-                if is_hovered:
-                    # 📋 Copy button
-                    hov_copy = (self.hover_action == f'copy_{idx}')
-                    cr.set_source_rgba(0.20, 0.28, 0.40, 0.95 if hov_copy else 0.85)
-                    self.rounded_rect(cr, cx + 32, cy + 30, 36, 32, 6)
-                    cr.fill_preserve()
-                    cr.set_source_rgba(0.38, 0.65, 0.98, 1.0 if hov_copy else 0.8)
-                    cr.set_line_width(1.0)
-                    cr.stroke()
+                # 2. ✏️ Edit Button
+                bx_edit = cx + CARD_W - 28
+                hov_edit = (self.hover_action == f'edit_{idx}')
+                cr.set_source_rgba(0.20, 0.28, 0.40, 0.95 if hov_edit else 0.8)
+                self.rounded_rect(cr, bx_edit, by_btn, 24, 22, 5)
+                cr.fill_preserve()
+                cr.set_source_rgba(0.38, 0.65, 0.98 if hov_edit else 0.45, 0.9 if hov_edit else 0.6)
+                cr.set_line_width(1.0)
+                cr.stroke()
 
-                    layout.set_text('📋', -1)
-                    desc_btn = Pango.FontDescription('Sans 12')
-                    layout.set_font_description(desc_btn)
-                    cr.move_to(cx + 40, cy + 34)
-                    PangoCairo.show_layout(cr, layout)
-
-                    # ✏️ Edit button
-                    hov_edit = (self.hover_action == f'edit_{idx}')
-                    cr.set_source_rgba(0.20, 0.28, 0.40, 0.95 if hov_edit else 0.85)
-                    self.rounded_rect(cr, cx + 76, cy + 30, 36, 32, 6)
-                    cr.fill_preserve()
-                    cr.set_source_rgba(0.38, 0.65, 0.98, 1.0 if hov_edit else 0.8)
-                    cr.set_line_width(1.0)
-                    cr.stroke()
-
-                    layout.set_text('✏️', -1)
-                    cr.move_to(cx + 84, cy + 34)
-                    PangoCairo.show_layout(cr, layout)
-
-                    # ✕ Close button
-                    hov_close = (self.hover_action == f'close_{idx}')
-                    cr.set_source_rgba(0.88, 0.22, 0.22, 0.95 if hov_close else 0.85)
-                    self.rounded_rect(cr, cx + CARD_W - 22, cy - 4, 18, 18, 9)
-                    cr.fill()
-
-                    layout.set_text('✕', -1)
-                    desc_close = Pango.FontDescription('Sans Bold 8')
-                    layout.set_font_description(desc_close)
-                    cr.set_source_rgba(1.0, 1.0, 1.0, 1.0)
-                    cr.move_to(cx + CARD_W - 17, cy - 2)
-                    PangoCairo.show_layout(cr, layout)
+                layout.set_text('✏️', -1)
+                cr.move_to(bx_edit + 4, by_btn + 3)
+                PangoCairo.show_layout(cr, layout)
 
                 # Toast badge (e.g. "✓ Copied!")
                 if self.toast and self.toast.get('shot_idx') == idx:
                     cr.set_source_rgba(0.12, 0.68, 0.38, 0.95)
-                    self.rounded_rect(cr, cx + 24, cy + 42, CARD_W - 48, 26, 13)
+                    self.rounded_rect(cr, cx + 24, cy + 36, CARD_W - 48, 26, 13)
                     cr.fill_preserve()
                     cr.set_source_rgba(1.0, 1.0, 1.0, 0.8)
                     cr.set_line_width(1.0)
@@ -600,12 +687,12 @@ if HAS_GTK:
                     layout.set_font_description(desc_toast)
                     ink, logical = layout.get_pixel_extents()
                     cr.set_source_rgba(1.0, 1.0, 1.0, 1.0)
-                    cr.move_to(cx + 24 + (CARD_W - 48 - logical.width) // 2, cy + 46)
+                    cr.move_to(cx + 24 + (CARD_W - 48 - logical.width) // 2, cy + 40)
                     PangoCairo.show_layout(cr, layout)
 
-                # Clothespins clamping the rope and card
-                self.draw_pin(cr, cx + 22, cord_y + 2 - card_offset_y)
-                self.draw_pin(cr, cx + CARD_W - 30, cord_y + 2 - card_offset_y)
+                # ONE Single Wooden Clothespin in the Center!
+                pin_x = cx + (CARD_W - 10) / 2
+                self.draw_pin(cr, pin_x, cord_y + 2 - card_offset_y, is_hover=is_pin_hov)
 
                 cr.restore()
 
@@ -615,27 +702,30 @@ if HAS_GTK:
             if self.scroll_offset + self.visible_count < len(self.shots):
                 self.draw_nav_arrow(cr, w - 24, cord_y + 40, '▶', self.hover_action == 'nav_right')
 
-        def draw_pin(self, cr, px, py):
-            """Realistic wooden clothespin clamping the line and card."""
+        def draw_pin(self, cr, px, py, is_hover=False):
+            """Single realistic wooden clothespin clamping the line and card."""
             # Shadow
-            cr.set_source_rgba(0.0, 0.0, 0.0, 0.3)
-            self.rounded_rect(cr, px + 1, py - 9, 8, 25, 2)
+            cr.set_source_rgba(0.0, 0.0, 0.0, 0.35)
+            self.rounded_rect(cr, px + 1, py - 9, 10, 26, 2)
             cr.fill()
 
             # Wooden body
-            cr.set_source_rgba(0.87, 0.69, 0.45, 1.0)
-            self.rounded_rect(cr, px, py - 10, 8, 25, 2)
+            if is_hover:
+                cr.set_source_rgba(0.96, 0.78, 0.52, 1.0)  # Brighter on hover
+            else:
+                cr.set_source_rgba(0.87, 0.69, 0.45, 1.0)
+            self.rounded_rect(cr, px, py - 10, 10, 26, 2)
             cr.fill_preserve()
-            cr.set_source_rgba(0.58, 0.40, 0.22, 1.0)
-            cr.set_line_width(0.8)
+            cr.set_source_rgba(0.68 if is_hover else 0.58, 0.48 if is_hover else 0.40, 0.25 if is_hover else 0.22, 1.0)
+            cr.set_line_width(1.0 if is_hover else 0.8)
             cr.stroke()
 
             # Metal coil spring in groove
             cr.set_source_rgba(0.35, 0.38, 0.45, 1.0)
-            cr.rectangle(px, py - 1, 8, 3)
+            cr.rectangle(px, py - 1, 10, 3)
             cr.fill()
             cr.set_source_rgba(0.85, 0.90, 0.95, 0.9)
-            cr.rectangle(px + 2, py - 1, 4, 1)
+            cr.rectangle(px + 2, py - 1, 6, 1)
             cr.fill()
 
         def draw_nav_arrow(self, cr, ax, ay, symbol, is_hover):
@@ -717,7 +807,7 @@ if HAS_GTK:
                     elif self.scroll_offset + self.visible_count < len(self.shots) and w - 24 <= ex <= w - 4 and cord_y + 40 <= ey <= cord_y + 76:
                         self.hover_action = 'nav_right'
 
-                # Check cards
+                # Check cards and single clothespin
                 if self.hover_action is None:
                     visible_shots = self.shots[self.scroll_offset : self.scroll_offset + self.visible_count]
                     start_x = 24
@@ -726,17 +816,45 @@ if HAS_GTK:
                         cx = start_x + i * (CARD_W + CARD_GAP)
                         cy = cord_y + 12
 
+                        # 1. Top single wooden clothespin (Click to unpin/drop!)
+                        pin_cx = cx + CARD_W / 2.0
+                        if pin_cx - 8 <= ex <= pin_cx + 8 and cord_y - 12 <= ey <= cy + 4:
+                            self.hover_action = f'unpin_{idx}'
+                            self.hover_shot_idx = idx
+                            break
+
+                        # 2. Card body & bottom buttons
                         if cx <= ex <= cx + CARD_W and cy <= ey <= cy + CARD_H:
                             self.hover_shot_idx = idx
 
-                            # Check sub-buttons
-                            if cx + CARD_W - 24 <= ex <= cx + CARD_W - 2 and cy - 6 <= ey <= cy + 16:
-                                self.hover_action = f'close_{idx}'
-                            elif cx + 32 <= ex <= cx + 68 and cy + 30 <= ey <= cy + 62:
-                                self.hover_action = f'copy_{idx}'
-                            elif cx + 76 <= ex <= cx + 112 and cy + 30 <= ey <= cy + 62:
+                            # Bottom buttons
+                            bx_view = cx + CARD_W - 56
+                            bx_edit = cx + CARD_W - 28
+                            by_btn = cy + 92
+
+                            if bx_view <= ex <= bx_view + 24 and by_btn <= ey <= by_btn + 24:
+                                self.hover_action = f'view_{idx}'
+                            elif bx_edit <= ex <= bx_edit + 24 and by_btn <= ey <= by_btn + 24:
                                 self.hover_action = f'edit_{idx}'
                             break
+
+            # Update desktop tooltips
+            if self.hover_action and self.hover_action.startswith('unpin_'):
+                self.da.set_tooltip_text('Unclip & drop from clothesline')
+            elif self.hover_action and self.hover_action.startswith('view_'):
+                self.da.set_tooltip_text('View larger image (Quick Look)')
+            elif self.hover_action and self.hover_action.startswith('edit_'):
+                self.da.set_tooltip_text('Markup & crop')
+            elif self.hover_action == 'btn_pin':
+                self.da.set_tooltip_text('Keep open' if not self.pinned else 'Auto-hide')
+            elif self.hover_action == 'btn_folder':
+                self.da.set_tooltip_text('Open screenshots folder')
+            elif self.hover_action == 'btn_clear':
+                self.da.set_tooltip_text('Clear all from clothesline')
+            elif self.hover_shot_idx is not None:
+                self.da.set_tooltip_text('Click to copy • Double-click to edit')
+            else:
+                self.da.set_tooltip_text(None)
 
             if prev_shot != self.hover_shot_idx or prev_act != self.hover_action:
                 self.da.queue_draw()
@@ -781,16 +899,17 @@ if HAS_GTK:
                     self.scroll_left()
                 elif self.hover_action == 'nav_right':
                     self.scroll_right()
-                elif self.hover_action and self.hover_action.startswith('close_'):
+                elif self.hover_action and self.hover_action.startswith('unpin_'):
                     idx = int(self.hover_action.split('_')[1])
                     self.remove_shot(idx)
-                elif self.hover_action and self.hover_action.startswith('copy_'):
+                elif self.hover_action and self.hover_action.startswith('view_'):
                     idx = int(self.hover_action.split('_')[1])
-                    self.copy_shot(idx)
+                    self.open_quick_look(self.shots[idx])
                 elif self.hover_action and self.hover_action.startswith('edit_'):
                     idx = int(self.hover_action.split('_')[1])
                     self.open_editor(self.shots[idx])
                 elif self.hover_shot_idx is not None:
+                    # Clicking card body copies to clipboard
                     self.copy_shot(self.hover_shot_idx)
 
         def on_scroll(self, widget, event):
@@ -822,6 +941,10 @@ if HAS_GTK:
             item_copy.connect('activate', lambda w: self.copy_shot(idx))
             menu.append(item_copy)
 
+            item_view = Gtk.MenuItem(label='🔍 View Full-Size Image')
+            item_view.connect('activate', lambda w: self.open_quick_look(shot))
+            menu.append(item_view)
+
             item_edit = Gtk.MenuItem(label='✏️ Open in Editor (Markup / Crop)')
             item_edit.connect('activate', lambda w: self.open_editor(shot))
             menu.append(item_edit)
@@ -833,12 +956,15 @@ if HAS_GTK:
 
             menu.append(Gtk.SeparatorMenuItem())
 
-            item_remove = Gtk.MenuItem(label='🗑️ Remove from Clothesline')
+            item_remove = Gtk.MenuItem(label='🗑️ Unclip / Drop from Clothesline')
             item_remove.connect('activate', lambda w: self.remove_shot(idx))
             menu.append(item_remove)
 
             menu.show_all()
             menu.popup(None, None, None, None, event.button, event.time)
+
+        def open_quick_look(self, shot):
+            QuickLookWindow(shot, on_edit=self.open_editor)
 
         # --- Actions ---
         def copy_shot(self, idx):
