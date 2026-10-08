@@ -42,10 +42,11 @@ if 'XDG_DATA_DIRS_VSCODE_SNAP_ORIG' in os.environ:
 if 'XDG_CONFIG_DIRS_VSCODE_SNAP_ORIG' in os.environ:
     os.environ['XDG_CONFIG_DIRS'] = os.environ['XDG_CONFIG_DIRS_VSCODE_SNAP_ORIG']
 
-from PIL import Image, ImageChops, ImageDraw, ImageFont
+from PIL import Image, ImageChops
 
 from shots import (
     FolderWatcher,
+    TextPainter,
     copy_image_to_clipboard,
     default_folder,
     fingerprint,
@@ -93,7 +94,7 @@ COLLAPSED_CORD_Y = 10
 CARD_W = 148
 CARD_H = 122
 CARD_GAP = 14
-CARDS_X = 24
+CARDS_X = 36            # leaves room for the ◀ arrow
 THUMB_SLOT = (136, 82)
 MAX_HISTORY = 40
 VISIBLE_CARDS = 4
@@ -699,7 +700,7 @@ class ClotheslineCore:
 
         # 5. Scroll navigation arrows (if more cards exist than fit)
         if self.scroll_offset > 0:
-            self.draw_nav_arrow(cr, 4, base_y + 40, '◀', self.hover_action == 'nav_left')
+            self.draw_nav_arrow(cr, 8, base_y + 40, '◀', self.hover_action == 'nav_left')
         if self.scroll_offset + self.visible_count < len(self.shots):
             self.draw_nav_arrow(cr, w - 24, base_y + 40, '▶', self.hover_action == 'nav_right')
 
@@ -928,7 +929,7 @@ class ClotheslineCore:
                 return None, act_id
 
         # Check nav buttons
-        if self.scroll_offset > 0 and 4 <= ex <= 24 and cord_y + 40 <= ey <= cord_y + 76:
+        if self.scroll_offset > 0 and 8 <= ex <= 28 and cord_y + 40 <= ey <= cord_y + 76:
             return None, 'nav_left'
         if (self.scroll_offset + self.visible_count < len(self.shots)
                 and w - 24 <= ex <= w - 4 and cord_y + 40 <= ey <= cord_y + 76):
@@ -1489,103 +1490,22 @@ if HAS_GTK:
 # ==============================================================================
 # Tkinter Engine (Windows): the same Cairo scene, shown through a colour-key window
 # ==============================================================================
-class PilText:
-    """Draws text into small cairo surfaces with Pillow, for desktops without Pango.
-
-    Letters use Segoe UI, symbols like ✓ ◀ use Segoe UI Symbol, and emoji use the
-    colour Segoe UI Emoji font (DejaVu / Noto stand in on Linux).
-    """
-
-    TEXT = ['segoeui.ttf', 'arial.ttf', 'DejaVuSans.ttf']
-    BOLD = ['segoeuib.ttf', 'arialbd.ttf', 'DejaVuSans-Bold.ttf']
-    SYMBOL = ['seguisym.ttf', 'DejaVuSans.ttf']
-    EMOJI = ['seguiemj.ttf', 'NotoColorEmoji.ttf', '/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf']
+class PilText(TextPainter):
+    """Text for desktops without Pango, cached as cairo surfaces."""
 
     def __init__(self):
-        self.fonts = {}
+        super().__init__()
         self.cache = {}
-
-    def font(self, kind, px):
-        """(font, scale) for this kind and pixel size. Bitmap emoji fonts load at their one size and get scaled."""
-        key = (kind, px)
-        if key not in self.fonts:
-            found = None
-            for name in getattr(self, kind):
-                try:
-                    found = (ImageFont.truetype(name, px), 1.0)
-                    break
-                except OSError:
-                    try:
-                        found = (ImageFont.truetype(name, 109), px / 109)
-                        break
-                    except OSError:
-                        continue
-            if found is None:
-                found = (ImageFont.load_default(px), 1.0)
-            self.fonts[key] = found
-        return self.fonts[key]
-
-    @staticmethod
-    def runs(text):
-        """Split text into (kind, piece) runs: 'EMOJI', 'SYMBOL', or plain text."""
-        out = []
-        chars = list(text)
-        for i, ch in enumerate(chars):
-            if ch == '️':
-                continue
-            o = ord(ch)
-            next_vs = i + 1 < len(chars) and chars[i + 1] == '️'
-            if o >= 0x1F000 or next_vs or ch == '✨':
-                kind = 'EMOJI'
-            elif o >= 0x2190:
-                kind = 'SYMBOL'
-            else:
-                kind = 'TEXT'
-            if out and out[-1][0] == kind and kind != 'EMOJI':
-                out[-1][1] += ch
-            else:
-                out.append([kind, ch])
-        return out
 
     def render(self, text, pt, rgba, bold=False):
         """(cairo surface, width) for the text."""
         key = (text, pt, rgba, bold)
-        if key in self.cache:
-            return self.cache[key]
-        if len(self.cache) > 400:
-            self.cache.clear()
-
-        px = max(6, round(pt * 4 / 3))
-        fill = tuple(int(c * 255) for c in rgba)
-        pieces = []
-        for kind, piece in self.runs(text):
-            kind = 'BOLD' if kind == 'TEXT' and bold else kind
-            font, scale = self.font(kind, px)
-            if scale == 1.0:
-                width = math.ceil(font.getlength(piece))
-                pieces.append((piece, font, kind, width, None))
-            else:
-                # Draw big, then shrink to size
-                big_w = math.ceil(font.getlength(piece))
-                big = Image.new('RGBA', (max(1, big_w), round(px / scale * 1.3)), (0, 0, 0, 0))
-                ImageDraw.Draw(big).text((0, 0), piece, font=font, embedded_color=True)
-                small = big.resize((max(1, round(big_w * scale)), max(1, round(big.height * scale))),
-                                   Image.Resampling.LANCZOS)
-                pieces.append((piece, font, kind, small.width, small))
-
-        total_w = max(1, sum(p[3] for p in pieces))
-        img = Image.new('RGBA', (total_w, round(px * 1.4)), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(img)
-        x = 0
-        for piece, font, kind, width, prerendered in pieces:
-            if prerendered is not None:
-                img.alpha_composite(prerendered, (x, max(0, (img.height - prerendered.height) // 2)))
-            else:
-                draw.text((x, 0), piece, font=font, fill=fill, embedded_color=(kind == 'EMOJI'))
-            x += width
-        result = (pil_to_surface(img), total_w)
-        self.cache[key] = result
-        return result
+        if key not in self.cache:
+            if len(self.cache) > 400:
+                self.cache.clear()
+            img = self.image(text, pt, rgba, bold)
+            self.cache[key] = (pil_to_surface(img), img.width)
+        return self.cache[key]
 
 
 class ClotheslineTkApp(ClotheslineCore):

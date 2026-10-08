@@ -3,9 +3,9 @@ import os
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
-from PIL import Image, ImageTk
+from PIL import Image, ImageDraw, ImageTk
 
-from shots import bake_marks, copy_image_to_clipboard, shift_marks
+from shots import TextPainter, bake_marks, copy_image_to_clipboard, shift_marks
 
 RESAMPLE = getattr(Image, 'Resampling', Image).LANCZOS
 
@@ -24,6 +24,9 @@ TEXT_LIGHT = '#f8fafc'
 TEXT_MUTED = '#94a3b8'
 
 
+PAINTER = TextPainter()
+
+
 def normalized(box):
     x0, y0, x1, y1 = box
     return min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)
@@ -35,8 +38,8 @@ class Tooltip:
         self.widget = widget
         self.text = text
         self.tip_window = None
-        widget.bind('<Enter>', self.show)
-        widget.bind('<Leave>', self.hide)
+        widget.bind('<Enter>', self.show, add='+')
+        widget.bind('<Leave>', self.hide, add='+')
 
     def show(self, event=None):
         if self.tip_window or not self.text:
@@ -56,6 +59,96 @@ class Tooltip:
         if self.tip_window:
             self.tip_window.destroy()
             self.tip_window = None
+
+
+class PillButton(tk.Canvas):
+    """Rounded toolbar button drawn with Pillow, in the same style as the clothesline's buttons."""
+
+    # kind: (fill, hover fill, border, text)
+    STYLES = {
+        'tool': ('#1f2838', '#2b3648', '#4b5d7a', '#f8fafc'),
+        'primary': ('#2563eb', '#3b76f6', '#5b8ff9', '#ffffff'),
+        'success': ('#059669', '#10a877', '#34c08f', '#ffffff'),
+    }
+    SELECTED = ('#2659b3', '#2f68c8', '#60a5fa', '#ffffff')
+    DISABLED = ('#1a212d', '#1a212d', '#2a3446', '#64748b')
+    HEIGHT = 34
+    PAD = 12
+    SCALE = 3  # draw large, then shrink, for smooth corners
+
+    def __init__(self, master, text='', command=None, kind='tool', tip=None, swatch=None):
+        super().__init__(master, height=self.HEIGHT, bg=BAR_BG, highlightthickness=0, bd=0, cursor='hand2')
+        self.text = text
+        self.command = command
+        self.kind = kind
+        self.swatch = swatch
+        self.hover = False
+        self.selected = False
+        self.enabled = True
+        self.photo = None
+        self.bind('<Enter>', lambda e: self.set_hover(True))
+        self.bind('<Leave>', lambda e: self.set_hover(False))
+        self.bind('<ButtonRelease-1>', self.on_click)
+        if tip:
+            Tooltip(self, tip)
+        self.render()
+
+    def set_hover(self, on):
+        self.hover = on
+        self.render()
+
+    def set_selected(self, on):
+        if on != self.selected:
+            self.selected = on
+            self.render()
+
+    def set_enabled(self, on):
+        if on != self.enabled:
+            self.enabled = on
+            self.configure(cursor='hand2' if on else '')
+            self.render()
+
+    def on_click(self, e):
+        inside = 0 <= e.x < self.winfo_width() and 0 <= e.y < self.winfo_height()
+        if self.enabled and inside and self.command:
+            self.command()
+
+    def render(self):
+        fill, hover_fill, border, fg = self.STYLES[self.kind]
+        if not self.enabled:
+            fill, hover_fill, border, fg = self.DISABLED
+        elif self.selected:
+            fill, hover_fill, border, fg = self.SELECTED
+        h, k = self.HEIGHT, self.SCALE
+
+        if self.swatch:
+            w = h
+            fill = hover_fill = self.swatch
+            border = '#ffffff' if self.selected else '#334155'
+            line = 3 if self.selected else 1
+        else:
+            fg_rgba = tuple(int(fg[i:i + 2], 16) / 255 for i in (1, 3, 5)) + (1.0,)
+            icon_only = len(self.text.replace('\ufe0f', '')) == 1
+            label = PAINTER.image(self.text, 12 if icon_only else 10, fg_rgba, bold=self.kind != 'tool')
+            w = max(h, label.width + 2 * self.PAD)
+            line = 1
+
+        img = Image.new('RGBA', (w * k, h * k), BAR_BG)
+        ImageDraw.Draw(img).rounded_rectangle(
+            (0, 0, w * k - 1, h * k - 1), radius=9 * k,
+            fill=hover_fill if self.hover and self.enabled else fill, outline=border, width=line * k)
+        img = img.resize((w, h), RESAMPLE)
+        if not self.swatch:
+            img.alpha_composite(label, ((w - label.width) // 2, max(0, (h - label.height) // 2 + 1)))
+
+        self.photo = ImageTk.PhotoImage(img)
+        self.configure(width=w)
+        self.delete('all')
+        self.create_image(0, 0, anchor='nw', image=self.photo)
+
+
+def separator(bar):
+    tk.Frame(bar, bg='#2a3446', width=1, height=24).pack(side='left', padx=8)
 
 
 class Editor(tk.Toplevel):
@@ -82,72 +175,53 @@ class Editor(tk.Toplevel):
         self.photo, self.photo_src, self.photo_size = None, None, None
 
         # Top Toolbar
-        bar = tk.Frame(self, bg=BAR_BG, pady=6, padx=8)
+        bar = tk.Frame(self, bg=BAR_BG, pady=8, padx=10)
         bar.pack(side='top', fill='x')
 
         # Clean Emoji Tool Buttons
         self.tool_buttons = {}
         tool_defs = [
             ('pen', '✏️', 'Pen tool'),
-            ('circle', '⭕', 'Circle tool'),
-            ('box', '⬜', 'Box tool'),
+            ('circle', '⭕\ufe0f', 'Circle tool'),
+            ('box', '⬜\ufe0f', 'Box tool'),
             ('crop', '✂️', 'Crop tool (draw box, then press Enter)'),
         ]
         for name, icon, tip in tool_defs:
-            btn = tk.Button(bar, text=icon, command=lambda n=name: self.set_tool(n),
-                            bg='#222a38', fg=TEXT_LIGHT, activebackground='#3b82f6',
-                            activeforeground='#ffffff', relief='flat', padx=8, pady=4,
-                            font=('DejaVu Sans', 11))
-            btn.pack(side='left', padx=2)
-            Tooltip(btn, tip)
+            btn = PillButton(bar, icon, command=lambda n=name: self.set_tool(n), tip=tip)
+            btn.pack(side='left', padx=3)
             self.tool_buttons[name] = btn
 
         # Color Palette
-        tk.Label(bar, text='│', bg=BAR_BG, fg='#334155', font=('DejaVu Sans', 11)).pack(side='left', padx=6)
+        separator(bar)
         self.color_buttons = {}
         for cname, chex, crgb in COLORS:
-            cbtn = tk.Button(bar, text='  ', bg=chex, activebackground=chex, relief='flat',
-                             width=2, height=1, bd=1,
-                             command=lambda ch=chex, cr=crgb: self.set_color(ch, cr))
-            cbtn.pack(side='left', padx=2)
-            Tooltip(cbtn, f'{cname} ink')
+            cbtn = PillButton(bar, swatch=chex, tip=f'{cname} ink',
+                              command=lambda ch=chex, cr=crgb: self.set_color(ch, cr))
+            cbtn.pack(side='left', padx=3)
             self.color_buttons[chex] = cbtn
 
         # Undo & Apply Crop Buttons
-        tk.Label(bar, text='│', bg=BAR_BG, fg='#334155', font=('DejaVu Sans', 11)).pack(side='left', padx=6)
-        self.undo_btn = tk.Button(bar, text='↩️', command=self.undo,
-                                  bg='#222a38', fg=TEXT_LIGHT, relief='flat', padx=8, pady=4,
-                                  font=('DejaVu Sans', 11))
-        self.undo_btn.pack(side='left', padx=2)
-        Tooltip(self.undo_btn, 'Undo (Ctrl+Z)')
+        separator(bar)
+        self.undo_btn = PillButton(bar, '↩️', command=self.undo, tip='Undo (Ctrl+Z)')
+        self.undo_btn.pack(side='left', padx=3)
 
-        self.apply_btn = tk.Button(bar, text='✂️ Apply', state='disabled', command=self.apply_crop,
-                                   bg='#222a38', fg=TEXT_MUTED, relief='flat', padx=8, pady=4,
-                                   font=('DejaVu Sans', 9, 'bold'))
+        self.apply_btn = PillButton(bar, '✂️ Apply', command=self.apply_crop, kind='primary',
+                                    tip='Apply Crop (Enter)')
+        self.apply_btn.set_enabled(False)
         self.apply_btn.pack(side='left', padx=3)
-        Tooltip(self.apply_btn, 'Apply Crop (Enter)')
 
         # Right-side action buttons: Save directly, Save Copy, Copy to clipboard
-        self.save_btn = tk.Button(bar, text='💾 Save', command=self.save,
-                                  bg='#2563eb', fg='#ffffff', activebackground='#1d4ed8',
-                                  activeforeground='#ffffff', relief='flat', padx=10, pady=4,
-                                  font=('DejaVu Sans', 9, 'bold'))
+        self.save_btn = PillButton(bar, '💾 Save', command=self.save, kind='primary',
+                                   tip='Save in-place (Ctrl+S)')
         self.save_btn.pack(side='right', padx=3)
-        Tooltip(self.save_btn, 'Save in-place (Ctrl+S)')
 
-        self.copy_btn = tk.Button(bar, text='📋 Copy', command=self.copy_to_clip,
-                                  bg='#059669', fg='#ffffff', activebackground='#047857',
-                                  activeforeground='#ffffff', relief='flat', padx=10, pady=4,
-                                  font=('DejaVu Sans', 9, 'bold'))
+        self.copy_btn = PillButton(bar, '📋 Copy', command=self.copy_to_clip, kind='success',
+                                   tip='Copy to clipboard (Ctrl+C)')
         self.copy_btn.pack(side='right', padx=3)
-        Tooltip(self.copy_btn, 'Copy to clipboard (Ctrl+C)')
 
-        self.save_copy_btn = tk.Button(bar, text='💾+ Copy', command=self.save_copy_as,
-                                       bg='#222a38', fg=TEXT_LIGHT, activebackground='#334155',
-                                       activeforeground='#ffffff', relief='flat', padx=8, pady=4,
-                                       font=('DejaVu Sans', 9))
+        self.save_copy_btn = PillButton(bar, '💾 Save Copy…', command=self.save_copy_as,
+                                        tip='Save as a new copy...')
         self.save_copy_btn.pack(side='right', padx=3)
-        Tooltip(self.save_copy_btn, 'Save as a new copy...')
 
         self.msg = tk.Label(bar, text='', bg=BAR_BG, fg='#38bdf8', font=('DejaVu Sans', 8))
         self.msg.pack(side='right', padx=8)
@@ -184,19 +258,16 @@ class Editor(tk.Toplevel):
         self.tool = name
         self.stroke = None
         self.crop = None
-        self.apply_btn.configure(state='disabled', fg=TEXT_MUTED, bg='#222a38')
+        self.apply_btn.set_enabled(False)
         for n, btn in self.tool_buttons.items():
-            if n == name:
-                btn.configure(bg='#3b82f6', fg='#ffffff')
-            else:
-                btn.configure(bg='#222a38', fg=TEXT_LIGHT)
+            btn.set_selected(n == name)
         self.redraw()
 
     def set_color(self, hex_val, rgb_val):
         self.color_hex = hex_val
         self.color_rgb = rgb_val
         for ch, btn in self.color_buttons.items():
-            btn.configure(relief='sunken' if ch == hex_val else 'flat', bd=2 if ch == hex_val else 1)
+            btn.set_selected(ch == hex_val)
 
     # --- Coordinates ---
     def to_picture(self, x, y):
@@ -210,7 +281,7 @@ class Editor(tk.Toplevel):
         self.start = p
         if self.tool == 'crop':
             self.crop = (p[0], p[1], p[0], p[1])
-            self.apply_btn.configure(state='disabled', fg=TEXT_MUTED, bg='#222a38')
+            self.apply_btn.set_enabled(False)
         elif self.tool == 'pen':
             self.stroke = [p]
         else:
@@ -233,9 +304,7 @@ class Editor(tk.Toplevel):
             if self.crop is not None:
                 x0, y0, x1, y1 = normalized(self.crop)
                 ok = (x1 - x0 > 5 and y1 - y0 > 5)
-            self.apply_btn.configure(state='normal' if ok else 'disabled',
-                                     fg='#ffffff' if ok else TEXT_MUTED,
-                                     bg='#2563eb' if ok else '#222a38')
+            self.apply_btn.set_enabled(ok)
         elif self.stroke is not None:
             pts = self.stroke
             if len(pts) > 1 and (self.tool == 'pen' or pts[0] != pts[-1]):
@@ -252,7 +321,7 @@ class Editor(tk.Toplevel):
             return
         self.base, self.marks = self.undo_stack.pop()
         self.crop = None
-        self.apply_btn.configure(state='disabled', fg=TEXT_MUTED, bg='#222a38')
+        self.apply_btn.set_enabled(False)
         self.redraw()
 
     def apply_crop(self):
@@ -266,7 +335,7 @@ class Editor(tk.Toplevel):
         self.base = self.base.crop(box)
         self.marks = shift_marks(self.marks, box[0], box[1])
         self.crop = None
-        self.apply_btn.configure(state='disabled', fg=TEXT_MUTED, bg='#222a38')
+        self.apply_btn.set_enabled(False)
         self.redraw()
         self.set_tool('pen')
 
