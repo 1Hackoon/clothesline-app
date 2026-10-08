@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 PKG_NAME="clothesline"
 ARCH="all"
 BUILD_DIR="build_deb/${PKG_NAME}_${VERSION}_${ARCH}"
