@@ -14,7 +14,48 @@ INK = (255, 59, 48)
 
 def default_folder():
     """Where Windows and the usual Linux desktops (GNOME, KDE) save screenshots."""
+    sys_name = platform.system()
+    if sys_name == 'Windows':
+        found = _windows_screenshots_folder()
+        if found:
+            return found
+    elif sys_name == 'Linux' and shutil.which('xdg-user-dir'):
+        # Honours translated folder names, e.g. ~/Imagens on a Portuguese desktop
+        try:
+            pictures = subprocess.run(['xdg-user-dir', 'PICTURES'], capture_output=True,
+                                      text=True, timeout=2).stdout.strip()
+            if pictures and os.path.abspath(pictures) != os.path.expanduser('~'):
+                return os.path.join(pictures, 'Screenshots')
+        except Exception:
+            pass
     return os.path.join(os.path.expanduser('~'), 'Pictures', 'Screenshots')
+
+
+def _windows_screenshots_folder():
+    """The Windows Screenshots known folder (follows OneDrive redirection), or None."""
+    try:
+        import ctypes
+        import uuid
+        from ctypes import wintypes
+
+        class GUID(ctypes.Structure):
+            _fields_ = [('Data1', ctypes.c_uint32), ('Data2', ctypes.c_uint16),
+                        ('Data3', ctypes.c_uint16), ('Data4', ctypes.c_ubyte * 8)]
+
+        u = uuid.UUID('{b7bede81-df94-4682-a7d8-57a52620b86f}')  # FOLDERID_Screenshots
+        guid = GUID(u.fields[0], u.fields[1], u.fields[2], (ctypes.c_ubyte * 8)(*u.bytes[8:]))
+        shell32 = ctypes.windll.shell32
+        shell32.SHGetKnownFolderPath.argtypes = [ctypes.POINTER(GUID), wintypes.DWORD,
+                                                 wintypes.HANDLE, ctypes.POINTER(ctypes.c_void_p)]
+        raw = ctypes.c_void_p()
+        if shell32.SHGetKnownFolderPath(ctypes.byref(guid), 0, None, ctypes.byref(raw)) != 0:
+            return None
+        try:
+            return ctypes.wstring_at(raw.value)
+        finally:
+            ctypes.windll.ole32.CoTaskMemFree(raw)
+    except Exception:
+        return None
 
 
 def load_image(path):
@@ -201,6 +242,15 @@ def copy_image_to_clipboard(image):
             data = output.getvalue()[14:]  # Strip 14-byte BITMAPFILEHEADER
             user32 = ctypes.windll.user32
             kernel32 = ctypes.windll.kernel32
+            # 64-bit handles: without these, ctypes cuts pointers to 32 bits and crashes
+            kernel32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+            kernel32.GlobalAlloc.restype = ctypes.c_void_p
+            kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+            kernel32.GlobalLock.restype = ctypes.c_void_p
+            kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+            user32.OpenClipboard.argtypes = [ctypes.c_void_p]
+            user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+            user32.SetClipboardData.restype = ctypes.c_void_p
             GMEM_MOVEABLE = 0x0002
             CF_DIB = 8
             h_mem = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))

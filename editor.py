@@ -402,16 +402,22 @@ class Editor(tk.Toplevel):
             self.destroy()
 
 
+def run_standalone(file_path):
+    """Open the editor on one picture in its own window; returns when it closes."""
+    if not os.path.exists(file_path):
+        return
+    root = tk.Tk()
+    root.withdraw()
+    im = Image.open(file_path).convert('RGB')
+    ed = Editor(root, im, path=file_path, on_saved=lambda shot, img, path: root.destroy())
+    ed.protocol('WM_DELETE_WINDOW', lambda: (ed.on_close(), root.destroy() if not ed.winfo_exists() else None))
+    ed.bind('<Destroy>', lambda e: root.destroy() if e.widget == ed else None)
+    root.mainloop()
+
+
 if __name__ == '__main__':
     import sys
-    if len(sys.argv) > 1 and os.path.exists(sys.argv[1]):
-        file_path = sys.argv[1]
-        root = tk.Tk()
-        root.withdraw()
-        im = Image.open(file_path).convert('RGB')
-        ed = Editor(root, im, path=file_path, on_saved=lambda shot, img, path: root.destroy())
-        ed.protocol('WM_DELETE_WINDOW', lambda: (ed.on_close(), root.destroy() if not ed.winfo_exists() else None))
-        ed.bind('<Destroy>', lambda e: root.destroy() if e.widget == ed else None)
-        root.mainloop()
+    if len(sys.argv) > 1:
+        run_standalone(sys.argv[1])
 
 

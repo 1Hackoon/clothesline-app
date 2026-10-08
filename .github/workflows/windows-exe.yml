@@ -1,0 +1,46 @@
+# Builds Clothesline.exe on a real Windows machine.
+# Runs by hand (Actions tab -> "Windows build" -> Run workflow) or when a tag like v1.1.0 is pushed;
+# a tag also attaches the .exe to that GitHub Release.
+name: Windows build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install pillow pycairo pyinstaller
+
+      - name: Smoke test (draw one frame with the Windows text path)
+        run: |
+          python -c "import clothesline as c; s, w = c.PilText().render('\U0001F4CC ✓ Copied! ◀ ▶ ✏️', 9, (1, 1, 1, 1)); assert w > 20; print('text ok', w)"
+
+      - name: Make icon
+        run: python -c "from PIL import Image; Image.open('assets/clothesline.png').save('clothesline.ico', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])"
+
+      - name: Build exe
+        run: pyinstaller --noconfirm --onefile --windowed --name Clothesline --icon clothesline.ico clothesline.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Clothesline-windows
+          path: dist/Clothesline.exe
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Clothesline.exe

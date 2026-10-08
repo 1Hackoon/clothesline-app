@@ -11,3 +11,7 @@ venv/
 *.deb
 build_deb/
 
+dist/
+build/
+*.spec
+*.ico
