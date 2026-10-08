@@ -42,6 +42,11 @@ if 'XDG_DATA_DIRS_VSCODE_SNAP_ORIG' in os.environ:
 if 'XDG_CONFIG_DIRS_VSCODE_SNAP_ORIG' in os.environ:
     os.environ['XDG_CONFIG_DIRS'] = os.environ['XDG_CONFIG_DIRS_VSCODE_SNAP_ORIG']
 
+# Wayland does not let an app place its own window at the top of the screen, and GTK
+# never shows the line there. XWayland does, so use it whenever it is available.
+if os.environ.get('WAYLAND_DISPLAY') and os.environ.get('DISPLAY') and 'GDK_BACKEND' not in os.environ:
+    os.environ['GDK_BACKEND'] = 'x11'
+
 from PIL import Image, ImageChops
 
 from shots import (
