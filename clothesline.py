@@ -100,7 +100,7 @@ CARD_W = 148
 CARD_H = 122
 CARD_GAP = 14
 ROPE_END_X = 4          # the rope ends rise to the top edge here
-ROPE_BEND = 8           # px over which the ends curve up to the top edge
+ROPE_BEND = 36          # px over which the ends curve up to the top edge
 CARDS_X = 36            # leaves room for the ◀ arrow
 THUMB_SLOT = (136, 82)
 MAX_HISTORY = 40
@@ -626,7 +626,7 @@ class ClotheslineCore:
         for x in sorted(set(list(range(left, left + 16)) + list(range(left + 16, right - 16, 6))
                             + list(range(right - 16, right + 1)))):
             u = (x - left) / (right - left)
-            rise = 1.0 - math.exp(-min(x - left, right - x) / 5)
+            rise = 1.0 - math.exp(-min(x - left, right - x) / 22)
             pts.append((x, cord_y * rise + 3.0 * 4 * u * (1 - u)))
         self.stroke_rope(cr, pts, width=2.6)
 
@@ -653,7 +653,7 @@ class ClotheslineCore:
         slots, base_y, loads, w = self.card_slots(now)
 
         # 1. Header controls (Pill buttons at top right)
-        btn_x = w - 124
+        btn_x = w - 190
         btn_y = max(4, base_y - 26)
         btns = [('btn_pin', '📌'), ('btn_folder', '📂'), ('btn_clear', '🗑️')]
         for i, (action_id, emoji) in enumerate(btns):
@@ -699,8 +699,8 @@ class ClotheslineCore:
     def draw_rope(self, cr, w, base_y, loads, now):
         # Fine steps where the ends curve up to the top edge, coarser along the line
         left, right = ROPE_END_X, int(w) - ROPE_END_X
-        xs = (list(range(left, left + 30)) + list(range(left + 30, right - 30, 6))
-              + list(range(right - 30, right + 1)) + [px for px, _ in loads if left < px < right])
+        xs = (list(range(left, left + 60, 2)) + list(range(left + 60, right - 60, 6))
+              + list(range(right - 60, right + 1, 2)) + [px for px, _ in loads if left < px < right])
         pts = [(x, self.rope_y(x, base_y, w, loads, now)) for x in sorted(set(xs))]
         self.stroke_rope(cr, pts, width=3.0)
 
@@ -913,7 +913,7 @@ class ClotheslineCore:
         cord_y = EXPANDED_CORD_Y
 
         # Check header buttons
-        btn_x = w - 124
+        btn_x = w - 190
         btn_y = max(4, cord_y - 26)
         for i, act_id in enumerate(['btn_pin', 'btn_folder', 'btn_clear']):
             bx = btn_x + i * 30
