@@ -99,6 +99,7 @@ COLLAPSED_CORD_Y = 10
 CARD_W = 148
 CARD_H = 122
 CARD_GAP = 14
+MOUNT_X = 6             # where the rope ends are tied to the top edge
 CARDS_X = 36            # leaves room for the ◀ arrow
 THUMB_SLOT = (136, 82)
 MAX_HISTORY = 40
@@ -616,32 +617,15 @@ class ClotheslineCore:
         w = COLLAPSED_WIDTH
         cord_y = COLLAPSED_CORD_Y
 
-        # Cord Drop Shadow
-        cr.set_source_rgba(0.0, 0.0, 0.0, 0.3)
-        cr.set_line_width(3.0)
-        cr.move_to(8, cord_y + 1.2)
-        cr.curve_to(w * 0.35, cord_y + 2.8, w * 0.65, cord_y + 2.8, w - 8, cord_y + 1.2)
-        cr.stroke()
-
-        # Main Hemp Rope
-        cr.set_source_rgba(0.84, 0.70, 0.51, 1.0)
-        cr.set_line_width(2.6)
-        cr.move_to(8, cord_y)
-        cr.curve_to(w * 0.35, cord_y + 1.8, w * 0.65, cord_y + 1.8, w - 8, cord_y)
-        cr.stroke()
-
-        # Rope Highlight Strand
-        cr.set_source_rgba(0.98, 0.93, 0.85, 0.75)
-        cr.set_line_width(0.9)
-        cr.move_to(8, cord_y - 0.7)
-        cr.curve_to(w * 0.35, cord_y + 1.1, w * 0.65, cord_y + 1.1, w - 8, cord_y - 0.7)
-        cr.stroke()
-
-        # End Mount Eyelets
-        for ax in [8, w - 8]:
-            cr.set_source_rgba(0.48, 0.55, 0.65, 1.0)
-            cr.arc(ax, cord_y, 3.2, 0, 2 * math.pi)
-            cr.fill()
+        # Rope tied up to two mounts on the top edge
+        pts = [(3, 0), (8, cord_y)]
+        for x in range(14, w - 8, 6):
+            u = (x - 8) / (w - 16)
+            pts.append((x, cord_y + 1.35 * 4 * u * (1 - u)))
+        pts += [(w - 8, cord_y), (w - 3, 0)]
+        self.stroke_rope(cr, pts, width=2.6)
+        for ax in [3, w - 3]:
+            self.draw_mount(cr, ax, small=True)
 
         # Center Wooden Grip Pin
         mid_x = w / 2.0
@@ -666,7 +650,7 @@ class ClotheslineCore:
         slots, base_y, loads, w = self.card_slots(now)
 
         # 1. Header controls (Pill buttons at top right)
-        btn_x = w - 100
+        btn_x = w - 114
         btn_y = max(4, base_y - 26)
         btns = [('btn_pin', '📌'), ('btn_folder', '📂'), ('btn_clear', '🗑️')]
         for i, (action_id, emoji) in enumerate(btns):
@@ -713,27 +697,53 @@ class ClotheslineCore:
         xs = list(range(16, int(w) - 16, 6)) + [w - 16] + [px for px, _ in loads if 16 < px < w - 16]
         pts = [(x, self.rope_y(x, base_y, w, loads, now)) for x in sorted(xs)]
 
+        # Both ends run up to mounts on the top edge of the screen, so the line really hangs
+        pts = [(MOUNT_X, 0)] + pts + [(w - MOUNT_X, 0)]
+        self.stroke_rope(cr, pts, width=3.0)
+
+        # Knots where the line turns up, and the mounts it is tied to
+        for kx in [16, w - 16]:
+            cr.set_source_rgba(0.62, 0.48, 0.31, 1.0)
+            cr.arc(kx, base_y, 2.8, 0, 2 * math.pi)
+            cr.fill()
+        for ax in [MOUNT_X, w - MOUNT_X]:
+            self.draw_mount(cr, ax)
+
+    def stroke_rope(self, cr, pts, width):
+        """A hemp rope along the points: shadow, body, and a light strand on top."""
         cr.save()
         cr.set_line_join(cairo.LINE_JOIN_ROUND)
         cr.set_line_cap(cairo.LINE_CAP_ROUND)
         strands = [
-            (1.5, (0.0, 0.0, 0.0, 0.28), 3.5),     # shadow
-            (0.0, (0.84, 0.70, 0.51, 1.0), 3.0),   # hemp
-            (-0.8, (0.98, 0.93, 0.85, 0.75), 1.0), # highlight
+            (1.5, (0.0, 0.0, 0.0, 0.28), width + 0.5),   # shadow
+            (0.0, (0.84, 0.70, 0.51, 1.0), width),       # hemp
+            (-0.8, (0.98, 0.93, 0.85, 0.75), width / 3), # highlight
         ]
-        for dy, rgba, width in strands:
+        for dy, rgba, line in strands:
             cr.set_source_rgba(*rgba)
-            cr.set_line_width(width)
+            cr.set_line_width(line)
             cr.move_to(pts[0][0], pts[0][1] + dy)
             for x, y in pts[1:]:
                 cr.line_to(x, y + dy)
             cr.stroke()
         cr.restore()
 
-        # End anchors
-        for ax in [16, w - 16]:
-            cr.set_source_rgba(0.48, 0.55, 0.65, 1.0)
-            cr.arc(ax, base_y, 3.8, 0, 2 * math.pi)
+    def draw_mount(self, cr, x, small=False):
+        """A little metal plate screwed to the top edge that the rope is tied to."""
+        half = 4 if small else 6
+        h = 4 if small else 6
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.3)
+        self.rounded_rect(cr, x - half + 1, -2, half * 2, h + 3, 2)
+        cr.fill()
+        cr.set_source_rgba(0.55, 0.61, 0.70, 1.0)
+        self.rounded_rect(cr, x - half, -3, half * 2, h + 3, 2)
+        cr.fill_preserve()
+        cr.set_source_rgba(0.30, 0.35, 0.43, 1.0)
+        cr.set_line_width(0.8)
+        cr.stroke()
+        if not small:
+            cr.set_source_rgba(0.85, 0.89, 0.94, 0.9)
+            cr.arc(x, 2, 1.2, 0, 2 * math.pi)
             cr.fill()
 
     def draw_hanging(self, cr, s):
@@ -926,7 +936,7 @@ class ClotheslineCore:
         cord_y = EXPANDED_CORD_Y
 
         # Check header buttons
-        btn_x = w - 100
+        btn_x = w - 114
         btn_y = max(4, cord_y - 26)
         for i, act_id in enumerate(['btn_pin', 'btn_folder', 'btn_clear']):
             bx = btn_x + i * 30
